@@ -94,21 +94,20 @@ pub enum Packet<'a> {
     Error {
         op_code: u16,
         error_code: u16,
-        error_msg: &'a [u8],
+        error_msg: &'a str,
     },
 }
 
 impl<'a> Packet<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Packet<'a>, Error> {
-        // let mut src = Cursor::new(&bytes[..]);
         let op_code = u16::from_be_bytes([bytes[0], bytes[1]]);
 
         let packet = match op_code {
             READ_OPCODE => parse_rwrq(bytes, op_code)?,
             WRITE_OPCODE => parse_rwrq(bytes, op_code)?,
-            DATA_OPCODE => todo!(),
-            ACK_OPCODE => todo!(),
-            ERROR_OPCODE => todo!(),
+            DATA_OPCODE => parse_data(bytes)?,
+            ACK_OPCODE => parse_ack(bytes)?,
+            ERROR_OPCODE => parse_error(bytes)?,
             _ => Err(Error::InvalidOpcode)?,
         };
 
@@ -158,6 +157,21 @@ fn parse_ack(bytes: &[u8]) -> Result<Packet, Error> {
     })
 }
 
+fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
+    let error_code = u16::from_be_bytes([bytes[2], bytes[3]]);
+
+    let mut cursor = Cursor::new(&bytes[4..]);
+
+    let error_msg = read_until_zero_byte(&mut cursor)?;
+    let error_msg = std::str::from_utf8(error_msg).unwrap();
+
+    Ok(Packet::Error {
+        op_code: ERROR_OPCODE,
+        error_code,
+        error_msg,
+    })
+}
+
 fn read_until_zero_byte<'a>(cursor: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], Error> {
     let start = cursor.position() as usize;
     let end = cursor.get_ref().len() - 1;
@@ -175,7 +189,9 @@ fn read_until_zero_byte<'a>(cursor: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], E
 
 #[cfg(test)]
 mod test {
-    use super::{Mode, Packet, READ_OPCODE, WRITE_OPCODE};
+    use crate::packet::ERROR_OPCODE;
+
+    use super::{Mode, Packet, ACK_OPCODE, DATA_OPCODE, READ_OPCODE, WRITE_OPCODE};
 
     fn test_rwrq(rq: &[u8], exp_op_code: u16, exp_file_name: &str, exp_mode: Mode) {
         let packet = Packet::parse(rq).unwrap();
@@ -198,7 +214,7 @@ mod test {
                 );
                 assert_eq!(mode, exp_mode, "Expected: {:?}\nGot: {:?}", exp_mode, mode)
             }
-            _ => panic!("did not get expected: PacketRequest"),
+            _ => panic!("did not get expected packet: Request"),
         }
     }
 
@@ -222,5 +238,67 @@ mod test {
         ];
 
         test_rwrq(wrq, WRITE_OPCODE, "main.rs", Mode::NetAscii);
+    }
+
+    #[test]
+    fn test_parse_data() {
+        let data = &[
+            0x00, 0x03, 0x00, 0x00, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C,
+            0x64,
+        ];
+
+        let packet = Packet::parse(data).unwrap();
+
+        match packet {
+            Packet::Data {
+                op_code,
+                block,
+                data,
+                len,
+            } => {
+                assert_eq!(op_code, DATA_OPCODE);
+                assert_eq!(block, 0);
+                assert_eq!(&data[0..11], b"hello world");
+                assert_eq!(len, 11);
+            }
+            _ => panic!("did not get expected packet: Data"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ack() {
+        let data = &[0x00, 0x04, 0x00, 0x00];
+
+        let packet = Packet::parse(data).unwrap();
+
+        match packet {
+            Packet::Ack { op_code, block } => {
+                assert_eq!(op_code, ACK_OPCODE);
+                assert_eq!(block, 0);
+            }
+            _ => panic!("did not get expected packet: Ack"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error() {
+        let data = &[
+            0x00, 0x05, 0x00, 0x00, 0x65, 0x72, 0x72, 0x6F, 0x72, 0x00, /**/ 0x00,
+        ];
+
+        let packet = Packet::parse(data).unwrap();
+
+        match packet {
+            Packet::Error {
+                op_code,
+                error_code,
+                error_msg,
+            } => {
+                assert_eq!(op_code, ERROR_OPCODE);
+                assert_eq!(error_code, 0);
+                assert_eq!(error_msg, "error");
+            }
+            _ => panic!("did not get expected packet: Error"),
+        }
     }
 }

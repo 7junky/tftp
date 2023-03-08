@@ -41,14 +41,14 @@ impl From<&str> for Mode {
     }
 }
 
-const READ_OPCODE: u16 = 1;
-const WRITE_OPCODE: u16 = 2;
-const DATA_OPCODE: u16 = 3;
-const ACK_OPCODE: u16 = 4;
-const ERROR_OPCODE: u16 = 5;
+pub const READ_OPCODE: u16 = 1;
+pub const WRITE_OPCODE: u16 = 2;
+pub const DATA_OPCODE: u16 = 3;
+pub const ACK_OPCODE: u16 = 4;
+pub const ERROR_OPCODE: u16 = 5;
 
 /// https://www.rfc-editor.org/rfc/rfc1350
-pub enum Packet<'a> {
+pub enum Packet {
     /// RRQ/WRQ Packet
     ///  2 bytes     string    1 byte     string   1 byte
     ///  ------------------------------------------------
@@ -57,7 +57,7 @@ pub enum Packet<'a> {
     /// Mode can be either "netascii", "octet" or "mail"
     Request {
         op_code: u16,
-        file_name: &'a str,
+        file: String,
         mode: Mode,
     },
     /// DATA Packet
@@ -96,11 +96,11 @@ pub enum Packet<'a> {
     ///  5 Unknown transfer ID.
     ///  6 File already exists.
     ///  7 No such user.
-    Error { error_code: u16, error_msg: &'a str },
+    Error { error_code: u16, error_msg: String },
 }
 
-impl<'a> Packet<'a> {
-    pub fn deserialize(bytes: &'a [u8]) -> Result<Packet<'a>, Error> {
+impl Packet {
+    pub fn deserialize(bytes: &[u8]) -> Result<Packet, Error> {
         let op_code = u16::from_be_bytes([bytes[0], bytes[1]]);
 
         let packet = match op_code {
@@ -119,7 +119,7 @@ impl<'a> Packet<'a> {
         match self {
             Packet::Request {
                 op_code,
-                file_name,
+                file,
                 mode,
             } => {
                 let mut res: Vec<u8> = Vec::with_capacity(30);
@@ -127,7 +127,7 @@ impl<'a> Packet<'a> {
                 let op_code = op_code.to_be_bytes();
                 res.extend_from_slice(&op_code);
 
-                let file_name = file_name.as_bytes();
+                let file_name = file.as_bytes();
                 res.extend_from_slice(file_name);
                 res.push(0);
 
@@ -190,8 +190,8 @@ impl<'a> Packet<'a> {
 fn parse_rwrq(bytes: &[u8], op_code: u16) -> Result<Packet, Error> {
     let mut cursor = Cursor::new(&bytes[2..]);
 
-    let file_name = read_until_zero_byte(&mut cursor)?;
-    let file_name = std::str::from_utf8(file_name).unwrap();
+    let file = read_until_zero_byte(&mut cursor)?;
+    let file = std::str::from_utf8(file).unwrap();
 
     let mode = read_until_zero_byte(&mut cursor)?;
     let mode = std::str::from_utf8(mode).unwrap();
@@ -199,7 +199,7 @@ fn parse_rwrq(bytes: &[u8], op_code: u16) -> Result<Packet, Error> {
 
     Ok(Packet::Request {
         op_code,
-        file_name,
+        file: file.to_owned(),
         mode,
     })
 }
@@ -231,7 +231,7 @@ fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
 
     Ok(Packet::Error {
         error_code,
-        error_msg,
+        error_msg: error_msg.to_owned(),
     })
 }
 
@@ -252,17 +252,15 @@ fn read_until_zero_byte<'a>(cursor: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], E
 
 #[cfg(test)]
 mod test {
-    use crate::packet::ERROR_OPCODE;
+    use super::{Mode, Packet, READ_OPCODE, WRITE_OPCODE};
 
-    use super::{Mode, Packet, ACK_OPCODE, DATA_OPCODE, READ_OPCODE, WRITE_OPCODE};
-
-    fn test_rwrq(rq: &[u8], exp_op_code: u16, exp_file_name: &str, exp_mode: Mode) {
+    fn test_rwrq(rq: &[u8], exp_op_code: u16, exp_file: &str, exp_mode: Mode) {
         let packet = Packet::deserialize(rq).unwrap();
 
         match packet {
             Packet::Request {
                 op_code,
-                file_name,
+                file,
                 mode,
             } => {
                 assert_eq!(
@@ -270,11 +268,7 @@ mod test {
                     "Expected: {}\nGot: {}",
                     exp_op_code, op_code
                 );
-                assert_eq!(
-                    file_name, exp_file_name,
-                    "Expected: {}\nGot: {}",
-                    exp_file_name, file_name
-                );
+                assert_eq!(file, exp_file, "Expected: {}\nGot: {}", exp_file, file);
                 assert_eq!(mode, exp_mode, "Expected: {:?}\nGot: {:?}", exp_mode, mode)
             }
             _ => panic!("did not get expected packet: Request"),

@@ -7,6 +7,12 @@ pub enum Mode {
     Mail,
 }
 
+impl Mode {
+    pub fn encode(&self) -> &[u8] {
+        todo!()
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     InvalidOpcode,
@@ -62,7 +68,6 @@ pub enum Packet<'a> {
     /// The block numbers on data packets begin with one and increase by one for
     /// each new block of data.
     Data {
-        op_code: u16,
         block: u16,
         data: [u8; 512],
 
@@ -76,7 +81,7 @@ pub enum Packet<'a> {
     ///  ---------------------
     /// The  block  number  in an  ACK echoes the block number of the DATA packet being
     /// acknowledged.
-    Ack { op_code: u16, block: u16 },
+    Ack { block: u16 },
     /// ERROR Packet
     ///  2 bytes     2 bytes      string    1 byte
     ///  -----------------------------------------
@@ -91,15 +96,11 @@ pub enum Packet<'a> {
     ///  5 Unknown transfer ID.
     ///  6 File already exists.
     ///  7 No such user.
-    Error {
-        op_code: u16,
-        error_code: u16,
-        error_msg: &'a str,
-    },
+    Error { error_code: u16, error_msg: &'a str },
 }
 
 impl<'a> Packet<'a> {
-    pub fn parse(bytes: &'a [u8]) -> Result<Packet<'a>, Error> {
+    pub fn deserialize(bytes: &'a [u8]) -> Result<Packet<'a>, Error> {
         let op_code = u16::from_be_bytes([bytes[0], bytes[1]]);
 
         let packet = match op_code {
@@ -112,6 +113,77 @@ impl<'a> Packet<'a> {
         };
 
         Ok(packet)
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        match self {
+            Packet::Request {
+                op_code,
+                file_name,
+                mode,
+            } => {
+                let mut res: Vec<u8> = Vec::with_capacity(30);
+
+                let op_code = op_code.to_be_bytes();
+                res.extend_from_slice(&op_code);
+
+                let file_name = file_name.as_bytes();
+                res.extend_from_slice(file_name);
+                res.push(0);
+
+                let mode = mode.encode();
+                res.extend_from_slice(mode);
+                res.push(0);
+
+                res
+            }
+            Packet::Data {
+                block,
+                data,
+                len: _,
+            } => {
+                let mut res: Vec<u8> = Vec::with_capacity(516);
+
+                let op_code = DATA_OPCODE.to_be_bytes();
+                res.extend_from_slice(&op_code);
+
+                let block = block.to_be_bytes();
+                res.extend_from_slice(&block);
+
+                res.extend_from_slice(data);
+
+                res
+            }
+            Packet::Ack { block } => {
+                let mut res: Vec<u8> = Vec::with_capacity(4);
+
+                let op_code = ACK_OPCODE.to_be_bytes();
+                res.extend_from_slice(&op_code);
+
+                let block = block.to_be_bytes();
+                res.extend_from_slice(&block);
+
+                res
+            }
+            Packet::Error {
+                error_code,
+                error_msg,
+            } => {
+                let mut res: Vec<u8> = Vec::with_capacity(30);
+
+                let op_code = ERROR_OPCODE.to_be_bytes();
+                res.extend_from_slice(&op_code);
+
+                let error_code = error_code.to_be_bytes();
+                res.extend_from_slice(&error_code);
+
+                let error_msg = error_msg.as_bytes();
+                res.extend_from_slice(&error_msg);
+                res.push(0);
+
+                res
+            }
+        }
     }
 }
 
@@ -140,21 +212,13 @@ fn parse_data(bytes: &[u8]) -> Result<Packet, Error> {
     // TODO: handle error
     let len = reader.read(&mut data).expect("ok");
 
-    Ok(Packet::Data {
-        op_code: DATA_OPCODE,
-        block,
-        data,
-        len,
-    })
+    Ok(Packet::Data { block, data, len })
 }
 
 fn parse_ack(bytes: &[u8]) -> Result<Packet, Error> {
     let block = u16::from_be_bytes([bytes[2], bytes[3]]);
 
-    Ok(Packet::Ack {
-        op_code: ACK_OPCODE,
-        block,
-    })
+    Ok(Packet::Ack { block })
 }
 
 fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
@@ -166,7 +230,6 @@ fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
     let error_msg = std::str::from_utf8(error_msg).unwrap();
 
     Ok(Packet::Error {
-        op_code: ERROR_OPCODE,
         error_code,
         error_msg,
     })
@@ -194,7 +257,7 @@ mod test {
     use super::{Mode, Packet, ACK_OPCODE, DATA_OPCODE, READ_OPCODE, WRITE_OPCODE};
 
     fn test_rwrq(rq: &[u8], exp_op_code: u16, exp_file_name: &str, exp_mode: Mode) {
-        let packet = Packet::parse(rq).unwrap();
+        let packet = Packet::deserialize(rq).unwrap();
 
         match packet {
             Packet::Request {
@@ -247,16 +310,10 @@ mod test {
             0x64,
         ];
 
-        let packet = Packet::parse(data).unwrap();
+        let packet = Packet::deserialize(data).unwrap();
 
         match packet {
-            Packet::Data {
-                op_code,
-                block,
-                data,
-                len,
-            } => {
-                assert_eq!(op_code, DATA_OPCODE);
+            Packet::Data { block, data, len } => {
                 assert_eq!(block, 0);
                 assert_eq!(&data[0..11], b"hello world");
                 assert_eq!(len, 11);
@@ -269,11 +326,10 @@ mod test {
     fn test_parse_ack() {
         let data = &[0x00, 0x04, 0x00, 0x00];
 
-        let packet = Packet::parse(data).unwrap();
+        let packet = Packet::deserialize(data).unwrap();
 
         match packet {
-            Packet::Ack { op_code, block } => {
-                assert_eq!(op_code, ACK_OPCODE);
+            Packet::Ack { block } => {
                 assert_eq!(block, 0);
             }
             _ => panic!("did not get expected packet: Ack"),
@@ -286,15 +342,13 @@ mod test {
             0x00, 0x05, 0x00, 0x00, 0x65, 0x72, 0x72, 0x6F, 0x72, 0x00, /**/ 0x00,
         ];
 
-        let packet = Packet::parse(data).unwrap();
+        let packet = Packet::deserialize(data).unwrap();
 
         match packet {
             Packet::Error {
-                op_code,
                 error_code,
                 error_msg,
             } => {
-                assert_eq!(op_code, ERROR_OPCODE);
                 assert_eq!(error_code, 0);
                 assert_eq!(error_msg, "error");
             }

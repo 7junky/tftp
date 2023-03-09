@@ -41,11 +41,21 @@ impl From<&str> for Mode {
     }
 }
 
+// Opcodes
 pub const READ_OPCODE: u16 = 1;
 pub const WRITE_OPCODE: u16 = 2;
 pub const DATA_OPCODE: u16 = 3;
 pub const ACK_OPCODE: u16 = 4;
 pub const ERROR_OPCODE: u16 = 5;
+
+// Errors
+pub const FILE_NOT_FOUND: u16 = 1;
+pub const ACCESS_VIOLATION: u16 = 2;
+pub const DISK_FULL: u16 = 3;
+pub const ILLEGAL_OP: u16 = 4;
+pub const UNKNOWN_TID: u16 = 5;
+pub const FILE_EXISTS: u16 = 6;
+pub const NO_USER: u16 = 7;
 
 /// https://www.rfc-editor.org/rfc/rfc1350
 pub enum Packet {
@@ -96,7 +106,7 @@ pub enum Packet {
     ///  5 Unknown transfer ID.
     ///  6 File already exists.
     ///  7 No such user.
-    Error { error_code: u16, error_msg: String },
+    Error { code: u16, msg: String },
 }
 
 impl Packet {
@@ -165,20 +175,17 @@ impl Packet {
 
                 res
             }
-            Packet::Error {
-                error_code,
-                error_msg,
-            } => {
+            Packet::Error { code, msg } => {
                 let mut res: Vec<u8> = Vec::with_capacity(30);
 
                 let op_code = ERROR_OPCODE.to_be_bytes();
                 res.extend_from_slice(&op_code);
 
-                let error_code = error_code.to_be_bytes();
-                res.extend_from_slice(&error_code);
+                let code = code.to_be_bytes();
+                res.extend_from_slice(&code);
 
-                let error_msg = error_msg.as_bytes();
-                res.extend_from_slice(&error_msg);
+                let msg = msg.as_bytes();
+                res.extend_from_slice(&msg);
                 res.push(0);
 
                 res
@@ -222,16 +229,16 @@ fn parse_ack(bytes: &[u8]) -> Result<Packet, Error> {
 }
 
 fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
-    let error_code = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let code = u16::from_be_bytes([bytes[2], bytes[3]]);
 
     let mut cursor = Cursor::new(&bytes[4..]);
 
-    let error_msg = read_until_zero_byte(&mut cursor)?;
-    let error_msg = std::str::from_utf8(error_msg).unwrap();
+    let msg = read_until_zero_byte(&mut cursor)?;
+    let msg = std::str::from_utf8(msg).unwrap();
 
     Ok(Packet::Error {
-        error_code,
-        error_msg: error_msg.to_owned(),
+        code,
+        msg: msg.to_owned(),
     })
 }
 
@@ -339,12 +346,9 @@ mod test {
         let packet = Packet::deserialize(data).unwrap();
 
         match packet {
-            Packet::Error {
-                error_code,
-                error_msg,
-            } => {
-                assert_eq!(error_code, 0);
-                assert_eq!(error_msg, "error");
+            Packet::Error { code, msg } => {
+                assert_eq!(code, 0);
+                assert_eq!(msg, "error");
             }
             _ => panic!("did not get expected packet: Error"),
         }

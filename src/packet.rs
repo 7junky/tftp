@@ -49,6 +49,7 @@ pub const ACK_OPCODE: u16 = 4;
 pub const ERROR_OPCODE: u16 = 5;
 
 // Errors
+pub const SEE_MSG: u16 = 0;
 pub const FILE_NOT_FOUND: u16 = 1;
 pub const ACCESS_VIOLATION: u16 = 2;
 pub const DISK_FULL: u16 = 3;

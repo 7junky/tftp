@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use tftp::packet::FILE_NOT_FOUND;
-use tftp::packet::{Packet, READ_OPCODE, WRITE_OPCODE};
+use tftp::packet::{Packet, FILE_EXISTS, FILE_NOT_FOUND, READ_OPCODE, SEE_MSG, WRITE_OPCODE};
 
 fn main() -> io::Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:69")?;
@@ -47,6 +46,8 @@ fn main() -> io::Result<()> {
             packet => {
                 if let Some(tx) = connections.get(&addr) {
                     tx.send(packet).expect("send packet to process");
+                } else {
+                    // TODO: send error
                 }
             }
         }
@@ -112,9 +113,8 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
                     data: _,
                     len: _,
                 } => {
-                    // Since this is a read request we're not expected data packets
+                    // Since this is a read request we're not expecting data packets
                     // from the client
-                    // Ignore?
                     continue;
                 }
                 Packet::Ack { block } => {
@@ -125,7 +125,8 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
                         break 'recv;
                     }
                 }
-                Packet::Error { code: _, msg: _ } => {
+                Packet::Error { code, msg } => {
+                    eprintln!("Error {}: {}", code, msg);
                     // End transfer?
                     break 'transfer;
                 }
@@ -146,13 +147,81 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
 ///
 /// WRQ and DATA packets are awknowledged by ACK and ERROR packets
 fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, file: String) {
-    // Send first ack
-    let res = Packet::Ack { block: 0 };
+    let file = match fs::File::create(file) {
+        Ok(f) => f,
+        Err(e) => {
+            // TODO: handle error
+            eprintln!("Error: {}", e);
+            socket
+                .send_to(
+                    Packet::Error {
+                        code: SEE_MSG,
+                        msg: "There was an error creating/accessing the file".into(),
+                    }
+                    .serialize()
+                    .as_slice(),
+                    dst,
+                )
+                .expect("send error");
+            return;
+        }
+    };
+
+    let mut writer = BufWriter::new(file);
+
+    // Send ack
+    let mut current_block = 0;
+    let res = Packet::Ack {
+        block: current_block,
+    };
     let res = res.serialize();
 
     // TODO: handle error
-    let len = socket.send_to(&res, dst).expect("send first ack");
-    println!("Sent {} bytes", len);
+    socket.send_to(&res, dst).expect("send first ack");
+    current_block += 1;
+
+    'recv: while let Ok(e) = rx.recv() {
+        match e {
+            Packet::Data { block, data, len } => {
+                // Write to file
+                if block != current_block {
+                    continue;
+                }
+
+                // TODO: handle error
+                writer.write_all(&data).expect("write file");
+
+                socket
+                    .send_to(
+                        Packet::Ack {
+                            block: current_block,
+                        }
+                        .serialize()
+                        .as_slice(),
+                        dst,
+                    )
+                    .expect("send ack");
+
+                current_block += 1;
+
+                if len < 512 {
+                    break 'recv;
+                }
+            }
+            Packet::Ack { block: _ } => {
+                // Since this is a write request we're not expecting ack packets
+                // from the client
+                continue;
+            }
+            Packet::Error { code, msg } => {
+                eprintln!("Error {}: {}", code, msg);
+                // End transfer?
+                // Rollback?
+                break 'recv;
+            }
+            _ => unreachable!(),
+        }
+    }
 
     todo!()
 }

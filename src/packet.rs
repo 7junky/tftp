@@ -287,8 +287,8 @@ mod test {
     fn test_parse_rrq() {
         // read, main.rs, netascii
         let rrq = &[
-            0x00, 0x01, 0x6D, 0x61, 0x69, 0x6E, 0x2E, 0x72, 0x73, 0x00, 0x6E, 0x65, 0x74, 0x61,
-            0x73, 0x63, 0x69, 0x69, 0x00, /**/ 0x00,
+            0x00, 0x01, b'm', b'a', b'i', b'n', b'.', b'r', b's', 0x00, b'n', b'e', b't', b'a',
+            b's', b'c', b'i', b'i', 0x00, /**/ 0x00,
         ];
 
         test_rwrq(rrq, READ_OPCODE, "main.rs", Mode::NetAscii);
@@ -296,10 +296,10 @@ mod test {
 
     #[test]
     fn test_parse_wrq() {
-        // read, main.rs, netascii
+        // write, main.rs, netascii
         let wrq = &[
-            0x00, 0x02, 0x6D, 0x61, 0x69, 0x6E, 0x2E, 0x72, 0x73, 0x00, 0x6E, 0x65, 0x74, 0x61,
-            0x73, 0x63, 0x69, 0x69, 0x00, /**/ 0x00,
+            0x00, 0x02, b'm', b'a', b'i', b'n', b'.', b'r', b's', 0x00, b'n', b'e', b't', b'a',
+            b's', b'c', b'i', b'i', 0x00, /**/ 0x00,
         ];
 
         test_rwrq(wrq, WRITE_OPCODE, "main.rs", Mode::NetAscii);

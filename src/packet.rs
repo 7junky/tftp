@@ -182,7 +182,9 @@ impl Packet {
                 let op_code = ERROR_OPCODE.to_be_bytes();
                 res.extend_from_slice(&op_code);
 
-                let code = code.to_be_bytes();
+                // The tftp client I have expects the error code to be little endian
+                // which isn't mentioned on the RFC
+                let code = code.to_le_bytes();
                 res.extend_from_slice(&code);
 
                 let msg = msg.as_bytes();
@@ -245,7 +247,7 @@ fn parse_ack(bytes: &[u8]) -> Result<Packet, Error> {
 }
 
 fn parse_error(bytes: &[u8]) -> Result<Packet, Error> {
-    let code = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let code = u16::from_le_bytes([bytes[2], bytes[3]]);
 
     let mut cursor = Cursor::new(&bytes[4..]);
 

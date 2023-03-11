@@ -64,7 +64,10 @@ fn main() -> io::Result<()> {
             // Sent to processes: Data, Ack, Error
             packet => {
                 if let Some(tx) = connections.get(&addr) {
-                    tx.send(packet).expect("send packet to process");
+                    if let Err(e) = tx.send(packet) {
+                        eprintln!("{}", e);
+                        // TODO: remove from connections map
+                    }
                 } else {
                     socket.send_to(
                         Packet::new_error(UNKNOWN_TID, "").serialize().as_slice(),
@@ -94,7 +97,9 @@ fn read_process(
         Err(e) => {
             eprintln!("Error: {}", e);
             socket.send_to(
-                Packet::new_error(FILE_NOT_FOUND, "").serialize().as_slice(),
+                Packet::new_error(FILE_NOT_FOUND, "File not found")
+                    .serialize()
+                    .as_slice(),
                 dst,
             )?;
 

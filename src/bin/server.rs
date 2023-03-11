@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Cursor, Read, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -31,6 +31,8 @@ fn main() -> io::Result<()> {
                 continue;
             }
         };
+
+        buf = [0; 1024];
 
         match packet {
             // Create processes for these:
@@ -108,8 +110,8 @@ fn read_process(
     };
 
     let mut cursor = Cursor::new(file);
-    let mut start = cursor.position() as usize;
-    let end = cursor.get_ref().seek(SeekFrom::End(0))? as usize;
+    let mut start = cursor.position();
+    let end = cursor.get_ref().metadata().unwrap().len();
 
     let mut data = [0; 512];
     let mut current_block = 1;
@@ -151,7 +153,7 @@ fn read_process(
             }
         }
 
-        start += len;
+        start += len as u64;
         cursor.set_position(len as u64);
     }
 
@@ -204,6 +206,7 @@ fn write_process(
                 }
 
                 writer.write_all(&data)?;
+                writer.flush()?;
 
                 socket.send_to(Packet::new_ack(current_block).serialize().as_slice(), dst)?;
 

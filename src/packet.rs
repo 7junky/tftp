@@ -193,6 +193,21 @@ impl Packet {
             }
         }
     }
+
+    pub fn new_error(code: u16, msg: &str) -> Self {
+        Self::Error {
+            code,
+            msg: msg.to_owned(),
+        }
+    }
+
+    pub fn new_data(block: u16, data: [u8; 512], len: usize) -> Self {
+        Self::Data { block, data, len }
+    }
+
+    pub fn new_ack(block: u16) -> Self {
+        Self::Ack { block }
+    }
 }
 
 fn parse_rwrq(bytes: &[u8], op_code: u16) -> Result<Packet, Error> {
@@ -308,8 +323,8 @@ mod test {
     #[test]
     fn test_parse_data() {
         let data = &[
-            0x00, 0x03, 0x00, 0x00, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C,
-            0x64,
+            0x00, 0x03, 0x00, 0x00, b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l',
+            b'd',
         ];
 
         let packet = Packet::deserialize(data).unwrap();
@@ -341,7 +356,7 @@ mod test {
     #[test]
     fn test_parse_error() {
         let data = &[
-            0x00, 0x05, 0x00, 0x00, 0x65, 0x72, 0x72, 0x6F, 0x72, 0x00, /**/ 0x00,
+            0x00, 0x05, 0x00, 0x00, b'e', b'r', b'r', b'o', b'r', 0x00, /**/ 0x00,
         ];
 
         let packet = Packet::deserialize(data).unwrap();

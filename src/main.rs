@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use tftp::packet::{Packet, FILE_EXISTS, FILE_NOT_FOUND, READ_OPCODE, SEE_MSG, WRITE_OPCODE};
+use tftp::packet::{Packet, FILE_NOT_FOUND, READ_OPCODE, SEE_MSG, WRITE_OPCODE};
 
 fn main() -> io::Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:69")?;
@@ -31,7 +31,6 @@ fn main() -> io::Result<()> {
                 connections.insert(addr, tx);
 
                 let socket = socket.clone();
-                let file = file.to_owned();
 
                 if op_code == READ_OPCODE {
                     thread::spawn(move || read_process(socket, addr, rx, file));
@@ -69,12 +68,7 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
             eprintln!("Error: {}", e);
             socket
                 .send_to(
-                    Packet::Error {
-                        code: FILE_NOT_FOUND,
-                        msg: Default::default(),
-                    }
-                    .serialize()
-                    .as_slice(),
+                    Packet::new_error(FILE_NOT_FOUND, "").serialize().as_slice(),
                     dst,
                 )
                 .expect("send error");
@@ -96,12 +90,7 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
         let len = cursor.get_ref().read(&mut data).expect("read to buf");
 
         // Send data
-        let res = Packet::Data {
-            block: current_block,
-            data,
-            len,
-        };
-        let res = res.serialize();
+        let res = Packet::new_data(current_block, data, len).serialize();
         // TODO: handle error
         socket.send_to(&res, dst).expect("send data");
 
@@ -154,12 +143,9 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
             eprintln!("Error: {}", e);
             socket
                 .send_to(
-                    Packet::Error {
-                        code: SEE_MSG,
-                        msg: "There was an error creating/accessing the file".into(),
-                    }
-                    .serialize()
-                    .as_slice(),
+                    Packet::new_error(SEE_MSG, "There was an error creating/accessing the file")
+                        .serialize()
+                        .as_slice(),
                     dst,
                 )
                 .expect("send error");
@@ -171,10 +157,7 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
 
     // Send ack
     let mut current_block = 0;
-    let res = Packet::Ack {
-        block: current_block,
-    };
-    let res = res.serialize();
+    let res = Packet::new_ack(current_block).serialize();
 
     // TODO: handle error
     socket.send_to(&res, dst).expect("send first ack");
@@ -192,14 +175,7 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
                 writer.write_all(&data).expect("write file");
 
                 socket
-                    .send_to(
-                        Packet::Ack {
-                            block: current_block,
-                        }
-                        .serialize()
-                        .as_slice(),
-                        dst,
-                    )
+                    .send_to(Packet::new_ack(current_block).serialize().as_slice(), dst)
                     .expect("send ack");
 
                 current_block += 1;
@@ -215,13 +191,9 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
             }
             Packet::Error { code, msg } => {
                 eprintln!("Error {}: {}", code, msg);
-                // End transfer?
-                // Rollback?
                 break 'recv;
             }
             _ => unreachable!(),
         }
     }
-
-    todo!()
 }

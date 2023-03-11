@@ -6,7 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use tftp::packet::{Packet, FILE_NOT_FOUND, READ_OPCODE, SEE_MSG, WRITE_OPCODE};
+use tftp::packet::{
+    Packet, FILE_NOT_FOUND, ILLEGAL_OP, READ_OPCODE, SEE_MSG, UNKNOWN_TID, WRITE_OPCODE,
+};
 
 fn main() -> io::Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:69")?;
@@ -15,10 +17,20 @@ fn main() -> io::Result<()> {
 
     let mut buf = [0; 1024];
     loop {
-        let (len, addr) = socket.recv_from(&mut buf)?;
-        println!("Received {} bytes", len);
+        let (_, addr) = socket.recv_from(&mut buf)?;
 
-        let packet = Packet::deserialize(&buf).expect("valid packet");
+        let packet = match Packet::deserialize(&buf) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                socket.send_to(
+                    Packet::new_error(ILLEGAL_OP, "").serialize().as_slice(),
+                    addr,
+                )?;
+
+                continue;
+            }
+        };
 
         match packet {
             // Create processes for these:
@@ -33,9 +45,17 @@ fn main() -> io::Result<()> {
                 let socket = socket.clone();
 
                 if op_code == READ_OPCODE {
-                    thread::spawn(move || read_process(socket, addr, rx, file));
+                    thread::spawn(move || {
+                        if let Err(e) = read_process(socket, addr, rx, file) {
+                            eprintln!("Error: {}", e);
+                        }
+                    });
                 } else if op_code == WRITE_OPCODE {
-                    thread::spawn(move || write_process(socket, addr, rx, file));
+                    thread::spawn(move || {
+                        if let Err(e) = write_process(socket, addr, rx, file) {
+                            eprintln!("Error: {}", e)
+                        }
+                    });
                 } else {
                     panic!("Request op_code is neither 1 or 2");
                 }
@@ -46,7 +66,10 @@ fn main() -> io::Result<()> {
                 if let Some(tx) = connections.get(&addr) {
                     tx.send(packet).expect("send packet to process");
                 } else {
-                    // TODO: send error
+                    socket.send_to(
+                        Packet::new_error(UNKNOWN_TID, "").serialize().as_slice(),
+                        addr,
+                    )?;
                 }
             }
         }
@@ -60,39 +83,40 @@ fn main() -> io::Result<()> {
 ///    source= B's TID, destination= A's TID.
 ///
 /// RRQ and ACK packets are awknowledged by DATA and ERROR packets
-fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, file: String) {
+fn read_process(
+    socket: Arc<UdpSocket>,
+    dst: SocketAddr,
+    rx: Receiver<Packet>,
+    file: String,
+) -> io::Result<()> {
     let file = match fs::File::open(file) {
         Ok(f) => f,
         Err(e) => {
-            // TODO: handle error
             eprintln!("Error: {}", e);
-            socket
-                .send_to(
-                    Packet::new_error(FILE_NOT_FOUND, "").serialize().as_slice(),
-                    dst,
-                )
-                .expect("send error");
-            return;
+            socket.send_to(
+                Packet::new_error(FILE_NOT_FOUND, "").serialize().as_slice(),
+                dst,
+            )?;
+
+            return Ok(());
         }
     };
 
-    // TODO: handle error
     let mut cursor = Cursor::new(file);
     let mut start = cursor.position() as usize;
-    let end = cursor.get_ref().seek(SeekFrom::End(0)).expect("end") as usize;
+    let end = cursor.get_ref().seek(SeekFrom::End(0))? as usize;
 
     let mut data = [0; 512];
     let mut current_block = 1;
 
     'transfer: while start < end {
-        // TODO: handle error
         // Read file into buffer
-        let len = cursor.get_ref().read(&mut data).expect("read to buf");
+        let len = cursor.get_ref().read(&mut data)?;
 
         // Send data
         let res = Packet::new_data(current_block, data, len).serialize();
-        // TODO: handle error
-        socket.send_to(&res, dst).expect("send data");
+
+        socket.send_to(&res, dst)?;
 
         // Wait for ACK (timeout?)
         'recv: while let Ok(e) = rx.recv() {
@@ -116,7 +140,6 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
                 }
                 Packet::Error { code, msg } => {
                     eprintln!("Error {}: {}", code, msg);
-                    // End transfer?
                     break 'transfer;
                 }
                 _ => unreachable!(),
@@ -126,6 +149,8 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
         start += len;
         cursor.set_position(len as u64);
     }
+
+    Ok(())
 }
 
 /// Initial Connection Protocol for writing a file
@@ -135,21 +160,24 @@ fn read_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, f
 ///    source= B's TID, destination= A's TID.
 ///
 /// WRQ and DATA packets are awknowledged by ACK and ERROR packets
-fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, file: String) {
+fn write_process(
+    socket: Arc<UdpSocket>,
+    dst: SocketAddr,
+    rx: Receiver<Packet>,
+    file: String,
+) -> io::Result<()> {
     let file = match fs::File::create(file) {
         Ok(f) => f,
         Err(e) => {
-            // TODO: handle error
             eprintln!("Error: {}", e);
-            socket
-                .send_to(
-                    Packet::new_error(SEE_MSG, "There was an error creating/accessing the file")
-                        .serialize()
-                        .as_slice(),
-                    dst,
-                )
-                .expect("send error");
-            return;
+            socket.send_to(
+                Packet::new_error(SEE_MSG, "There was an error creating/accessing the file")
+                    .serialize()
+                    .as_slice(),
+                dst,
+            )?;
+
+            return Ok(());
         }
     };
 
@@ -159,8 +187,7 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
     let mut current_block = 0;
     let res = Packet::new_ack(current_block).serialize();
 
-    // TODO: handle error
-    socket.send_to(&res, dst).expect("send first ack");
+    socket.send_to(&res, dst)?;
     current_block += 1;
 
     'recv: while let Ok(e) = rx.recv() {
@@ -171,12 +198,9 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
                     continue;
                 }
 
-                // TODO: handle error
-                writer.write_all(&data).expect("write file");
+                writer.write_all(&data)?;
 
-                socket
-                    .send_to(Packet::new_ack(current_block).serialize().as_slice(), dst)
-                    .expect("send ack");
+                socket.send_to(Packet::new_ack(current_block).serialize().as_slice(), dst)?;
 
                 current_block += 1;
 
@@ -196,4 +220,6 @@ fn write_process(socket: Arc<UdpSocket>, dst: SocketAddr, rx: Receiver<Packet>, 
             _ => unreachable!(),
         }
     }
+
+    Ok(())
 }

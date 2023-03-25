@@ -80,7 +80,7 @@ pub enum Packet {
     /// each new block of data.
     Data {
         block: u16,
-        data: [u8; 512],
+        data: Vec<u8>,
 
         // If its less than 512 bytes, it's the last data packet
         len: usize,
@@ -203,7 +203,8 @@ impl Packet {
         }
     }
 
-    pub fn new_data(block: u16, data: [u8; 512], len: usize) -> Self {
+    pub fn new_data(block: u16, mut data: Vec<u8>, len: usize) -> Self {
+        data.truncate(len);
         Self::Data { block, data, len }
     }
 
@@ -236,6 +237,9 @@ fn parse_data(bytes: &[u8]) -> Result<Packet, Error> {
     let mut reader = BufReader::new(&bytes[4..]);
     // TODO: handle error
     let len = reader.read(&mut data).expect("ok");
+
+    let mut data = data.to_vec();
+    data.truncate(len);
 
     Ok(Packet::Data { block, data, len })
 }

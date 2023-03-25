@@ -113,10 +113,10 @@ fn read_process(
     let mut start = cursor.position();
     let end = cursor.get_ref().metadata().unwrap().len();
 
-    let mut data = [0; 512];
     let mut current_block = 1;
 
     'transfer: while start < end {
+        let mut data = vec![0; 512];
         // Read file into buffer
         let len = cursor.get_ref().read(&mut data)?;
 
